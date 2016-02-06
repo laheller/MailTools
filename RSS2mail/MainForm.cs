@@ -1,12 +1,9 @@
 ﻿using System;
 using System.Collections;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.Configuration;
 using System.Data;
 using System.Data.OleDb;
 using System.Diagnostics;
-using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -15,12 +12,13 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using System.Xml;
-using CDO;
+
 using ADODB;
+using CDO;
 
 namespace RSS2mail
 {
-    public partial class MainForm : Form
+    public partial class MainForm : Form, ISMTPOnArrival
     {
         private OleDbConnection conn = null;
         private int fcInterval = 0;
@@ -56,8 +54,8 @@ namespace RSS2mail
             //Trace.WriteLine("Server version: {0}", conn.ServerVersion);
             //conn.Close();
 
-            fcInterval = Convert.ToInt32(ConfigurationManager.AppSettings["fcInterval"]);
-            msInterval = Convert.ToInt32(ConfigurationManager.AppSettings["msInterval"]);
+            fcInterval = Convert.ToInt32(ConfigurationManager.AppSettings["fcInterval"]) * 1000;	// in milliseconds
+            msInterval = Convert.ToInt32(ConfigurationManager.AppSettings["msInterval"]) * 1000;	// in milliseconds
 
             mc.sendemailaddress = "\"Ladislav Heller\" <heller.ladislav@zoznam.sk";
             mc.smtpserver = ConfigurationManager.AppSettings["smtpServer"];
@@ -173,6 +171,7 @@ namespace RSS2mail
             if (jobDone)
             {
                 jobDone = false;
+                lblFeedStatus.Text = "Feed status: Processing feed";
                 Hashtable uris = new Hashtable();
 
                 OleDbCommand cmd = conn.CreateCommand();
@@ -205,10 +204,14 @@ namespace RSS2mail
                             try
                             {
                                 cmd.ExecuteNonQuery();
+                                lblFeedStatus.Text = "Feed status: URL added: " + link;
                             }
                             catch (OleDbException dbex)
                             {
-                                if ((dbex.ErrorCode & 0x7FFFFFFF) == 0x4005) Trace.WriteLine("URL is already in database >> " + link);
+                            	if ((dbex.ErrorCode & 0x7FFFFFFF) == 0x4005)
+                            	{
+                            		//Trace.WriteLine("URL is already in database >> " + link);
+                            	}
                                 else Trace.WriteLine(dbex.ToString());
                             }
                             catch (Exception ex)
@@ -246,10 +249,27 @@ namespace RSS2mail
                         int ID = Convert.ToInt32(r["ID"]);
                         string URL = r["URL"].ToString().Trim(new char[] { '#' });
                         string subject = r["SUBJECT"].ToString();
-                        string rec = "heller.ladislav@zoznam.sk";
+                        string rec = "heller.ladislav@zoznam.sk";	//TODO: use more recipients from a list or DB
                         if (SendMail(rec, subject, URL, mc))
                         {
-                            // Set PROCESSED field of the actual record in [URLS] table to value 1
+                            #region Set PROCESSED = 1 for current item
+                            OleDbCommand wrc = conn.CreateCommand();
+                            wrc.CommandType = CommandType.Text;
+                            wrc.CommandText = String.Format("UPDATE [URLS] SET PROCESSED = 1 WHERE ID = {0}", ID);
+                            try
+                            {
+                            	Trace.WriteLine("Rows affected: " + wrc.ExecuteNonQuery() );
+                                Trace.WriteLine("Item processed: " + ID);
+                            }
+                            catch (OleDbException dbex)
+                            {
+                                Trace.WriteLine(dbex.ToString());
+                            }
+                            catch (Exception ex)
+                            {
+                                Trace.WriteLine(ex.ToString());
+                            }
+                            #endregion
                         }
                     }
                     r.Close();
@@ -271,7 +291,6 @@ namespace RSS2mail
 
         private bool SendMail(string to, string subject, string url, MailConfig pmc)
         {
-            bool success = true;
             DateTime before = DateTime.Now;
             try
             {
@@ -296,13 +315,17 @@ namespace RSS2mail
                 #endregion
                 fs.Update();
                 msg.Subject = subject;
+                Trace.WriteLine("Downloading email body from feed page...");
+                lblSendStatus.Text = "Send status: Downloading email body from feed page...";
                 msg.CreateMHTMLBody(url, CdoMHTMLFlags.cdoSuppressNone, null, null);
                 msg.To = to;
-                Console.WriteLine("Sending message...");
+                Trace.WriteLine("Sending message...");
+                lblSendStatus.Text = "Send status: Sending message...";
                 msg.Send();
                 TimeSpan total = DateTime.Now.Subtract(before);
                 Trace.WriteLine("Message sent successfully. Total time: " + total.ToString());
-                return success;
+                lblSendStatus.Text = "Send status: Message sent successfully. Total time: " + total.ToString();
+                return true;
             }
             catch (COMException cex)
             {
@@ -310,5 +333,11 @@ namespace RSS2mail
                 return false;
             }
         }
+    	
+		public void OnArrival(CDO.Message Msg, ref CdoEventStatus EventStatus)
+		{
+			MessageBox.Show(Msg.Subject, "Message arrived!", MessageBoxButtons.OK, MessageBoxIcon.Information);
+			EventStatus = CdoEventStatus.cdoRunNextSink;
+		}
     }
 }

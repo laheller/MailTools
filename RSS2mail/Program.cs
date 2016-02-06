@@ -10,7 +10,7 @@ namespace RSS2mail
         /// <summary>
         /// The main entry point for the application.
         /// </summary>
-        [STAThread]
+        [MTAThread]
         static void Main()
         {
             Application.EnableVisualStyles();
